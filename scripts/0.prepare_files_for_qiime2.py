@@ -21,8 +21,7 @@ args=parser.parse_args()
 pd.set_option('display.expand_frame_repr', False)
 df = pd.DataFrame()
 
-#'/media/christos/ssd/work/Infants/SRA_submission'
-#'/media/christos/ssd/work/Infants/publication/sequence_data'
+
 in_dir = args.inDir
 out_dir  = args.outDir
 
