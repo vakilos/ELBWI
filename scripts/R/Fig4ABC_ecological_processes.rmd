@@ -1,0 +1,321 @@
+
+```{r}
+#load libraries
+library("data.table")
+library("magrittr")
+library("ggplot2")
+library("readxl")
+library("vegan")
+library("dplyr")
+library("tidyverse")
+library("plyr")
+library("vegan")
+library("ape")
+library("cluster")
+library("MASS")
+library("phyloseq")
+library("data.table")
+library("magrittr")
+library(dplyr)
+library(reshape2)
+
+### set tmp directory as working direcory
+setwd()
+### save figures to exportDir
+exportDir=''
+```
+
+```{r}
+# read in bNTI, RC bray, and metadata files
+
+Metadata <- fread("meta_with_clinical.tsv")
+#Metadata <-fread()
+Metadata$SampleType = replace(Metadata$SampleType, Metadata$SampleType == 'Oral_cavity','Oral cavity')
+setnames(Metadata, old=c("oxygenCumIndex","il6WinIndex", 'AntiCumIndex',"Age"),new=c("DOS",'Elevated IL-6','Antibiotics','DoL'))
+colnames(Metadata)
+
+
+bNTI <- readRDS("bNTI.rds")
+RC_bray_raw <- readRDS("/media/christos/ssd/work/Infants/tmp/FINAL_CHRISTOS_tNST.rds")
+RC_bray_raw <- readRDS('RC_bray.rds')
+RC_bray <- RC_bray_raw$index.pair %>% as.data.table()
+RC_bray <- RC_bray[, c(1,2,12)]
+setnames(RC_bray, "name1", "SampleID_A")
+setnames(RC_bray, "name2", "SampleID_B")
+
+bNTI_1_datatable <-
+  bNTI %>%
+  as.data.table(keep.rownames = 'SampleID_A') %>% 
+  melt('SampleID_A', variable.name = 'SampleID_B', value.name = 'bNTI', ) %>%
+  
+  merge(Metadata[, list(SampleID_B = SampleID, SampleType_B = SampleType)], sort = FALSE) %>%
+  merge(Metadata[, list(SampleID_A = SampleID, SampleType_A = SampleType)], sort = FALSE) 
+
+bNTI_1_datatable <- as.data.table(bNTI_1_datatable)
+bNTI_1_datatable[SampleType_A == SampleType_B, Sample_comparison := 'same sample']
+bNTI_1_datatable[SampleType_A != SampleType_B, Sample_comparison := 'different sample']
+bNTI_1_datatable[SampleType_A == SampleType_B, Sample_comparison := SampleType_A]
+bNTI_1_datatable <- bNTI_1_datatable[!is.na(bNTI)]
+
+
+Environmental_processes <- merge(RC_bray, bNTI_1_datatable, by = c("SampleID_A", "SampleID_B"))
+
+saveRDS(Environmental_processes, "Environmental_processes.rds")
+```
+
+```{r}
+brown = '#653700'
+pink = '#ff796c'
+orange = '#f1c50d'
+P<-ggplot(
+  data = bNTI_1_datatable[! Sample_comparison == "different sample"],
+  mapping = aes(
+    x = Sample_comparison,
+    y = bNTI,
+    fill = Sample_comparison
+  )
+) + geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)
+) + scale_fill_manual(name="",values=c("Gut"=brown, "Oral cavity"=pink, "Skin"=orange)
+) + geom_hline(yintercept=c(-2,2), linetype="dotted"
+) + theme(axis.text.x = element_text(size=12), axis.title.y = element_text(size=14), axis.title.x = element_blank())
+
+P
+
+ggsave(plot = P, paste0(exportDir, 'bNTI_christos.svg'), width = 5, height = 5)
+ggsave(plot = P,  paste0(exportDir,'bNTI_christos.png'), width = 5, height = 5)
+```
+
+```{r}
+Environmental_processes <-readRDS('Environmental_processes.rds')
+Environmental_processes <- Environmental_processes[!Sample_comparison == "different sample"]
+Environmental_processes$RC.bray <- as.numeric(Environmental_processes$RC.bray)
+Environmental_processes[bNTI >= 2, Ecological_process := 'Variable Selection']
+Environmental_processes[bNTI <= -2, Ecological_process := 'Homogenizing Selection']
+Environmental_processes[abs(bNTI) <= 2 & abs(RC.bray) <= 0.95, Ecological_process := 'Drift']
+Environmental_processes[abs(bNTI) <= 2 & RC.bray >= 0.95, Ecological_process := 'Dispersal limitation + Drift']
+Environmental_processes[abs(bNTI) <= 2 & RC.bray <= -0.95, Ecological_process := 'Homogenizing Dispersal']
+
+
+environment_summary <- Environmental_processes[, .(.N), keyby = .(Ecological_process, Sample_comparison)]
+environment_summary[, Percent := N/sum(N), by = .(Sample_comparison)]
+
+P2 <-ggplot(
+  environment_summary[],
+  mapping = aes(
+    x = Sample_comparison,
+    y = Percent,
+    fill = Ecological_process
+  )
+) + geom_col(color = "black", width=0.8
+) + theme(axis.text.x = element_text(angle =0), aspect.ratio = 1.5) + scale_fill_discrete("Ecological Process") + ylab("Fraction") + xlab("Body site")
+P2
+
+ggsave(plot = P2, paste0(exportDir,'env_processes_sample.svg'), width = 5, height = 5)
+ggsave(plot = P2, paste0(exportDir,'env_processes_sample.png'), width = 5, height = 5)
+```
+
+
+```{r}
+bNTI_full <- bNTI
+bNTI_full[upper.tri(bNTI_full)] <- bNTI_full[lower.tri(bNTI_full)]
+diag(bNTI_full) <- 0
+bNTI_full[is.na(bNTI_full)] <- 0
+bNTI_norm <-t(apply(bNTI_full, 1, function(x)(x-min(x))/(max(x)-min(x))))
+colnames(Metadata)
+
+dbRDA_bNTI = capscale(bNTI_norm ~ DoL+DOS+Antibiotics+`Elevated IL-6`,Metadata, 
+                      dist="bray", na.action = na.omit, sqrt.dist = TRUE)
+
+pdf(paste0(exportDir,"db_RDA_bNTI_full.pdf"), width=6.1, height=6.1)
+plot(dbRDA_bNTI, scaling = 3#, display = c("sp", "cn")
+     ) # use base plot, might be done with ggplot2
+dev.off()
+dbRDA_bNTI$CCA
+anova(dbRDA_bNTI) # is the model significant?
+#anova(dbRDA_bNTI, by="axis", perm.max=500) # test axes for significance
+anova(dbRDA_bNTI, by="terms", permu=200) # test for sign. environ. variables
+
+### ordistep
+
+meta_null <- Metadata[, c("DoL", "DOS", "Antibiotics", "Elevated IL-6")] 
+
+meta_null <- as.data.frame(meta_null)
+for(i in 1:ncol(meta_null)){
+  meta_null[is.na(meta_null[,i]), i] <- mean(meta_null[,i], na.rm = TRUE)
+}
+
+mod0 <- capscale(bNTI_norm ~ 1, meta_null)  # Model with intercept only
+mod1 <- dbRDA_bNTI  # Model with all explanatory variables
+## With scope present, the default direction is "both"
+mod <- ordiR2step(mod0, scope = formula(mod1), na.action = na.exclude,  permutations = how(nperm = 1000))
+mod
+mod$anova
+```
+
+
+```{r}
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+bNTI_gut <- Environmental_processes[SampleType_B == "Gut" & SampleType_A == "Gut"]
+
+bNTI_gut_p <- bNTI_gut[ , c(1,2,4)]
+
+bNTI_GUT<-acast(bNTI_gut_p, SampleID_A~SampleID_B, value.var="bNTI")
+Metadata_GUT <- Metadata[SampleType=="Gut"] %>% as.data.frame()
+  
+bNTI_full <- bNTI_GUT
+bNTI_full[upper.tri(bNTI_full)] <- bNTI_full[lower.tri(bNTI_full)]
+diag(bNTI_full) <- 0
+bNTI_full[is.na(bNTI_full)] <- 0
+bNTI_norm <-t(apply(bNTI_full, 1, function(x)(x-min(x))/(max(x)-min(x))))
+colnames(Metadata_GUT)
+
+rownames(Metadata_GUT)
+rownames(Metadata_GUT) <- Metadata_GUT$SampleID
+rownames(Metadata_GUT)
+
+colnames(bNTI_norm)
+
+Metadata_GUT <- Metadata_GUT[colnames(bNTI_norm), ] # das hier ist dersubset schritt, der dir garantiert dass alles zusammenpasst
+
+dim(bNTI_norm)
+dim(Metadata_GUT)
+
+dbRDA_bNTI_GUT = vegan::capscale(bNTI_norm ~
+Age+Oxygenation+Antibiotics+`IL-6`,Metadata_GUT, dist="bray",
+na.action = na.omit)
+
+pdf("db_RDA_bNTI_gut.pdf", width=5, height=5)
+plot(dbRDA_bNTI_GUT, scaling = 1, display = c("sp", "cn")
+     ) # use base plot, might be done with ggplot2
+dev.off()
+
+anova(dbRDA_bNTI_GUT) # is the model significant?
+#anova(dbRDA_bNTI, by="axis", perm.max=500) # test axes for significance
+anova(dbRDA_bNTI_GUT, by="terms", permu=200) # test for sign. environ. variables
+
+### ordistep
+
+meta_null <- Metadata_GUT[, c("Age", "Oxygenation", "Antibiotics", "IL-6")] 
+
+mod0 <- capscale(bNTI_norm ~ 1, meta_null)  # Model with intercept only
+mod1 <- dbRDA_bNTI_GUT  # Model with all explanatory variables
+
+## With scope present, the default direction is "both"
+mod <- ordiR2step(mod0, scope = formula(mod1), na.action = na.exclude,  permutations = how(nperm = 1000))
+mod
+mod$anova
+
+```
+
+```{r}
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+bNTI_skin <- Environmental_processes[SampleType_B == "Skin" & SampleType_A == "Skin"]
+
+bNTI_skin_p <- bNTI_skin[ , c(1,2,4)]
+
+bNTI_SKIN<-acast(bNTI_skin_p, SampleID_A~SampleID_B, value.var="bNTI")
+Metadata_SKIN <- Metadata[SampleType=="Skin"] %>% as.data.frame()
+  
+bNTI_full <- bNTI_SKIN
+bNTI_full[upper.tri(bNTI_full)] <- bNTI_full[lower.tri(bNTI_full)]
+diag(bNTI_full) <- 0
+bNTI_full[is.na(bNTI_full)] <- 0
+bNTI_norm <-t(apply(bNTI_full, 1, function(x)(x-min(x))/(max(x)-min(x))))
+colnames(Metadata_SKIN)
+
+rownames(Metadata_SKIN)
+rownames(Metadata_SKIN) <- Metadata_SKIN$SampleID
+rownames(Metadata_SKIN)
+
+colnames(bNTI_norm)
+
+Metadata_SKIN <- Metadata_SKIN[colnames(bNTI_norm), ] # das hier ist dersubset schritt, der dir garantiert dass alles zusammenpasst
+
+dim(bNTI_norm)
+dim(Metadata_SKIN)
+
+dbRDA_bNTI_SKIN = vegan::capscale(bNTI_norm ~
+Age+Oxygenation+Antibiotics+`IL-6`,Metadata_SKIN, dist="bray",
+na.action = na.omit)
+
+pdf("db_RDA_bNTI_SKIN.pdf")
+plot(dbRDA_bNTI_SKIN, scaling = 3, display = c("sp", "cn")
+     ) # use base plot, might be done with ggplot2
+dev.off()
+
+anova(dbRDA_bNTI_SKIN) # is the model significant?
+#anova(dbRDA_bNTI, by="axis", perm.max=500) # test axes for significance
+anova(dbRDA_bNTI_SKIN, by="terms", permu=200) # test for sign. environ. variables
+
+### ordistep
+
+meta_null <- Metadata_SKIN[, c("Age", "Oxygenation", "Antibiotics", "IL-6")] 
+
+mod0 <- capscale(bNTI_norm ~ 1, meta_null)  # Model with intercept only
+mod1 <- dbRDA_bNTI_SKIN  # Model with all explanatory variables
+
+## With scope present, the default direction is "both"
+mod <- ordiR2step(mod0, scope = formula(mod1), na.action = na.exclude,  permutations = how(nperm = 1000))
+mod
+mod$anova
+
+```
+
+```{r}
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+
+### seperate bNTI into gut/skin/oral and run capscale/ordistep seperately
+bNTI_oral <- Environmental_processes[SampleType_B == "Oral_cavity" & SampleType_A == "Oral_cavity"]
+
+bNTI_oral_p <- bNTI_oral[ , c(1,2,4)]
+
+bNTI_ORAL<-acast(bNTI_oral_p, SampleID_A~SampleID_B, value.var="bNTI")
+Metadata_ORAL <- Metadata[SampleType=="Oral_cavity"] %>% as.data.frame()
+  
+bNTI_full <- bNTI_ORAL
+bNTI_full[upper.tri(bNTI_full)] <- bNTI_full[lower.tri(bNTI_full)]
+diag(bNTI_full) <- 0
+bNTI_full[is.na(bNTI_full)] <- 0
+bNTI_norm <-t(apply(bNTI_full, 1, function(x)(x-min(x))/(max(x)-min(x))))
+colnames(Metadata_ORAL)
+
+rownames(Metadata_ORAL)
+rownames(Metadata_ORAL) <- Metadata_ORAL$SampleID
+rownames(Metadata_ORAL)
+
+colnames(bNTI_norm)
+
+Metadata_ORAL <- Metadata_ORAL[colnames(bNTI_norm), ] # das hier ist dersubset schritt, der dir garantiert dass alles zusammenpasst
+
+dim(bNTI_norm)
+dim(Metadata_ORAL)
+
+dbRDA_bNTI_ORAL = vegan::capscale(bNTI_norm ~
+Age+Oxygenation+Antibiotics+`IL-6`,Metadata_ORAL, dist="bray",
+na.action = na.omit)
+
+pdf("db_RDA_bNTI_ORAL.pdf")
+plot(dbRDA_bNTI_ORAL, scaling = 3, display = c("sp", "cn")) #use base plot, might be done with ggplot2
+dev.off()
+
+anova(dbRDA_bNTI_ORAL) # is the model significant?
+#anova(dbRDA_bNTI, by="axis", perm.max=500) # test axes for significance
+anova(dbRDA_bNTI_SKIN, by="terms", permu=200) # test for sign. environ. variables
+
+### ordistep
+
+meta_null <- Metadata_ORAL[, c("Age", "Oxygenation", "Antibiotics", "IL-6")] 
+
+mod0 <- capscale(bNTI_norm ~ 1, meta_null)  # Model with intercept only
+mod1 <- dbRDA_bNTI_ORAL  # Model with all explanatory variables
+
+## With scope present, the default direction is "both"
+mod <- ordiR2step(mod0, scope = formula(mod1), na.action = na.exclude,  permutations = how(nperm = 1000))
+mod
+mod$anova
+
+```
