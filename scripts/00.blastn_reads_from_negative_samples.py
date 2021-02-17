@@ -8,7 +8,7 @@ pd.set_option('display.max_rows',None)
 
 parser=argparse.ArgumentParser(description="This script will merge reads (forward and reverse orientation) for read 1 and read 2 for each sample. Run in an python environment with the latest version of blast+ installed")
 parser.add_argument("-i", dest="inDir", help="Directory with all fastqs from SRA. (use full path)", required=True)
-parser.add_argument('-o', dest="outDir", help="Directory to export files. (use full path)", required=True, default='/media/christos/ssd/work/Infants/publication')
+parser.add_argument('-o', dest="outDir", help="Directory to export files. (use full path)", required=True, default='')
 args=parser.parse_args()
 
 inDir = args.inDir
